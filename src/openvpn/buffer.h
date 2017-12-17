@@ -914,6 +914,11 @@ bool char_class(const unsigned char c, const unsigned int flags);
 
 bool string_class(const char *str, const unsigned int inclusive, const unsigned int exclusive);
 
+/**
+ * Modify string in place. Guaranteed to not increase string length.
+ *
+ * @return true if no replacements have been made, false otherwise.
+ */
 bool string_mod(char *str, const unsigned int inclusive, const unsigned int exclusive, const char replace);
 
 const char *string_mod_const(const char *str,

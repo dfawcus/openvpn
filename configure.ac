@@ -405,6 +405,13 @@ ifdef(
 	]
 )
 
+AX_CHECK_COMPILE_FLAG([ -Werror=implicit ], [
+    CFLAGS="${CFLAGS} -Werror=implicit"
+])
+AX_CHECK_COMPILE_FLAG([ -Werror=format -Werror=format-security ], [
+    CFLAGS="${CFLAGS} -Werror=format -Werror=format-security"
+])
+
 AC_C_CONST
 AC_C_INLINE
 AC_C_VOLATILE
@@ -1071,9 +1078,11 @@ if test "$enable_lz4" = "yes" && test "$enable_comp_stub" = "no"; then
     if test -z "${LZ4_CFLAGS}" -a -z "${LZ4_LIBS}"; then
 	# if the user did not explicitly specify flags, try to autodetect
 	PKG_CHECK_MODULES([LZ4],
-			  [liblz4 >= 1.7.1],
+			  [liblz4 >= 1.7.1 liblz4 < 100],
 			  [have_lz4="yes"],
-			  [] # If this fails, we will do another test next
+			  [LZ4_LIBS="-llz4"] # If this fails, we will do another test next.
+					     # We also add set LZ4_LIBS otherwise the
+					     # linker will not know about the lz4 library
 	)
     fi
 
@@ -1111,16 +1120,20 @@ if test "$enable_lz4" = "yes" && test "$enable_comp_stub" = "no"; then
 	fi
     fi
 
-    # if LZ4_LIBS is set, we assume it will work, otherwise test
-    if test -z "${LZ4_LIBS}"; then
+    # Double check we have a few needed functions
+    if test "${have_lz4}" = "yes" ; then
 	AC_CHECK_LIB([lz4],
-		     [LZ4_compress],
-		     [LZ4_LIBS="-llz4"],
+		     [LZ4_compress_default],
+		     [],
+		     [have_lz4="no"])
+	AC_CHECK_LIB([lz4],
+		     [LZ4_decompress_safe],
+		     [],
 		     [have_lz4="no"])
     fi
 
     if test "${have_lz4}" != "yes" ; then
-	AC_MSG_RESULT([		usuable LZ4 library or header not found, using version in src/compat/compat-lz4.*])
+	AC_MSG_RESULT([		usable LZ4 library or header not found, using version in src/compat/compat-lz4.*])
 	AC_DEFINE([NEED_COMPAT_LZ4], [1], [use copy of LZ4 source in compat/])
 	LZ4_LIBS=""
     fi
@@ -1333,6 +1346,8 @@ AC_SUBST([OPTIONAL_PKCS11_HELPER_LIBS])
 
 AC_SUBST([PLUGIN_AUTH_PAM_CFLAGS])
 AC_SUBST([PLUGIN_AUTH_PAM_LIBS])
+
+AC_SUBST([OPENVPN_RELEASE], [PRODUCT_RELEASE])
 
 AM_CONDITIONAL([WIN32], [test "${WIN32}" = "yes"])
 AM_CONDITIONAL([GIT_CHECKOUT], [test "${GIT_CHECKOUT}" = "yes"])

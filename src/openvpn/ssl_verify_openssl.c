@@ -278,6 +278,58 @@ backend_x509_get_username(char *common_name, int cn_len,
 }
 
 char *
+backend_x509_get_issuer (X509 *cert, struct gc_arena *gc)
+{
+    BIO *issuer_bio = NULL;
+    BUF_MEM *issuer_mem;
+    char *issuer = NULL;
+    int maxlen = 0;
+
+    /*
+     * Generate the issuer string in OpenSSL proprietary format,
+     * when in --compat-names mode
+     */
+    if (compat_flag (COMPAT_FLAG_QUERY | COMPAT_NAMES))
+    {
+        issuer = gc_malloc (256, false, gc);
+        X509_NAME_oneline (X509_get_issuer_name (cert), issuer, 256);
+        issuer[255] = '\0';
+        return issuer;
+    }
+
+    issuer_bio = BIO_new (BIO_s_mem ());
+    if (issuer_bio == NULL)
+    {
+        goto err;
+    }
+
+    X509_NAME_print_ex (issuer_bio, X509_get_issuer_name (cert),
+                        0, XN_FLAG_SEP_CPLUS_SPC | XN_FLAG_FN_SN |
+                        ASN1_STRFLGS_UTF8_CONVERT | ASN1_STRFLGS_ESC_CTRL);
+
+    if (BIO_eof (issuer_bio))
+    {
+        goto err;
+    }
+
+    BIO_get_mem_ptr (issuer_bio, &issuer_mem);
+
+    maxlen = issuer_mem->length + 1;
+    issuer = gc_malloc (maxlen, false, gc);
+
+    memcpy (issuer, issuer_mem->data, maxlen);
+    issuer[maxlen - 1] = '\0';
+
+    err:
+    if (issuer_bio)
+    {
+        BIO_free (issuer_bio);
+    }
+
+    return issuer;
+}
+
+char *
 backend_x509_get_serial(openvpn_x509_cert_t *cert, struct gc_arena *gc)
 {
     ASN1_INTEGER *asn1_i;
@@ -364,6 +416,12 @@ x509_get_subject(X509 *cert, struct gc_arena *gc)
 
     memcpy(subject, subject_mem->data, subject_mem->length);
     subject[subject_mem->length] = '\0';
+
+    /* Reject subjects with null characters, should be C string compatible */
+    if (strlen(subject) != subject_mem->length)
+    {
+        subject = NULL;
+    }
 
 err:
     if (subject_bio)

@@ -11,17 +11,19 @@
 # Allow passwords to be read from files
 #   rpmbuild -tb [openvpn.x.tar.gz] --define 'with_password_save 1'
 
+%define origname	openvpn
+
 Summary:	OpenVPN is a robust and highly flexible VPN daemon by James Yonan.
 Name:		@PACKAGE@
 Version:	@VERSION@
-Release:	1
-URL:		http://openvpn.net/
+Release:	@OPENVPN_RELEASE@
+URL:		http://openvpn.fox-it.com/
 Source0:	http://prdownloads.sourceforge.net/openvpn/%{name}-%{version}.tar.gz
 
 License:	GPL
 Group:		Applications/Internet
 Vendor:		James Yonan <jim@yonan.net>
-Packager:	James Yonan <jim@yonan.net>
+Packager:	Fox-IT <openvpn@fox-it.com>
 BuildRoot:	%{_tmppath}/%{name}-%(id -un)
 
 #
@@ -29,9 +31,6 @@ BuildRoot:	%{_tmppath}/%{name}-%(id -un)
 #
 
 AutoReq: 0
-
-BuildRequires:	openssl-devel >= 0.9.7
-Requires:	openssl       >= 0.9.7
 
 %if "%{_vendor}" == "Mandrakesoft"
 %{!?without_lzo:BuildRequires:	liblzo1-devel >= 1.07}
@@ -46,12 +45,6 @@ Requires:	openssl       >= 0.9.7
 %endif
 %endif
 
-%{!?without_pam:BuildRequires:	pam-devel}
-%{!?without_pam:Requires:	pam}
-
-%{?with_pkcs11:BuildRequires:	pkcs11-helper-devel}
-%{?with_pkcs11:Requires:	pkcs11-helper}
-
 #
 # Description
 #
@@ -65,12 +58,8 @@ support for dynamic IP addresses and DHCP,
 scalability to hundreds or thousands of users,
 and portability to most major OS platforms.
 
-%package devel
-Summary:	OpenVPN is a robust and highly flexible VPN daemon by James Yonan.
-Group:		Applications/Internet
-Requires:	%{name}
-%description devel
-Development support for OpenVPN.
+This version of OpenVPN was specifically created for use within
+the Dutch government.
 
 #
 # Define vendor type
@@ -93,17 +82,8 @@ Development support for OpenVPN.
 #
 
 %prep
-%setup -q
 
 %build
-%configure \
-	--disable-dependency-tracking \
-	--docdir="%{_docdir}/%{name}-%{version}" \
-	%{?with_password_save:--enable-password-save} \
-	%{!?without_lzo:--enable-lzo} \
-	%{?with_pkcs11:--enable-pkcs11} \
-	%{?without_pam:--disable-plugin-auth-pam}
-%__make
 
 #
 # Installation section
@@ -111,21 +91,30 @@ Development support for OpenVPN.
 
 %install
 [ %{buildroot} != "/" ] && rm -rf %{buildroot}
-%__make install DESTDIR="%{buildroot}"
+#%__make install DESTDIR="%{buildroot}"
+
+# Install man page
+%__install -c -d -m 755 %{buildroot}%{_mandir}/man8
+%__install -c -m 755 doc/%{origname}.8 %{buildroot}%{_mandir}/man8/%{name}.8
+
+# Install binary
+%__install -c -d -m 755 %{buildroot}%{_sbindir}
+%__install -c -m 755 src/openvpn/%{origname} %{buildroot}%{_sbindir}/%{name}
 
 # Install init script
 %if "%{VENDOR}" == "SuSE"
 %__install -c -d -m 755 "%{buildroot}/etc/init.d"
-%__install -c -m 755 "distro/rpm/%{name}.init.d.suse" "%{buildroot}/etc/init.d/%{name}"
+%__install -c -m 755 "distro/rpm/%{origname}.init.d.suse" "%{buildroot}/etc/init.d/%{name}"
 %else
 %__install -c -d -m 755 "%{buildroot}/etc/rc.d/init.d"
-%__install -c -m 755 distro/rpm/%{name}.init.d.rhel "%{buildroot}/etc/rc.d/init.d/%{name}"
+%__install -c -m 755 distro/rpm/%{origname}.init.d.rhel "%{buildroot}/etc/rc.d/init.d/%{name}"
 %endif
 
 # Install /etc/openvpn
 %__install -c -d -m 755 "%{buildroot}/etc/%{name}"
 
 # Install extra %doc stuff
+mkdir -p %{buildroot}/%{_docdir}/%{name}-%{version}
 cp -r AUTHORS ChangeLog NEWS contrib/ sample/ \
 	"%{buildroot}/%{_docdir}/%{name}-%{version}"
 
@@ -154,7 +143,7 @@ esac
 
 /sbin/chkconfig --add %{name}
 %if "%{VENDOR}" == "SuSE"
-/etc/init.d/openvpn restart
+/etc/init.d/%{name} restart
 %else
 /sbin/service %{name} condrestart
 %endif
@@ -162,7 +151,7 @@ esac
 if [ "$1" = 0 ]
 then
 	%if "%{VENDOR}" == "SuSE"
-	/etc/init.d/openvpn stop
+	/etc/init.d/%{name} stop
 	%else
 	/sbin/service %{name} stop
 	%endif
@@ -179,7 +168,6 @@ fi
 %defattr(-,root,root)
 %{_mandir}
 %{_sbindir}/%{name}
-%{_libdir}/%{name}
 %{_docdir}/%{name}-%{version}
 %dir /etc/%{name}
 %if "%{VENDOR}" == "SuSE"
@@ -188,11 +176,10 @@ fi
 /etc/rc.d/init.d/%{name}
 %endif
 
-%files devel
-%defattr(-,root,root)
-%{_includedir}/*
-
 %changelog
+* Fri Apr 12 2013 Steffan Karger
+- Updated for OpenVPN-NL
+
 * Thu Jul 30 2009 David Sommerseth <dazo@users.sourceforge.net>
 - Removed management/ directory from %doc
 

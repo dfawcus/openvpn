@@ -1122,7 +1122,7 @@ socket_do_accept(socket_descriptor_t sd,
 
     if (!socket_defined(new_sd))
     {
-        msg(D_LINK_ERRORS | M_ERRNO, "TCP: accept(%d) failed", sd);
+        msg(D_LINK_ERRORS | M_ERRNO, "TCP: accept(%"PRI_OVPN_SKT") failed", sd);
     }
     /* only valid if we have remote_len_af!=0 */
     else if (remote_len_af && remote_len != remote_len_af)
@@ -1873,13 +1873,14 @@ phase2_inetd(struct link_socket *sock, const struct frame *frame,
             if (getsockname(sock->sd, &local_addr.addr.sa, &addrlen) == 0)
             {
                 sock->info.lsa->actual.dest.addr.sa.sa_family = local_addr.addr.sa.sa_family;
-                dmsg(D_SOCKET_DEBUG, "inetd(%s): using sa_family=%d from getsockname(%d)",
+                dmsg(D_SOCKET_DEBUG,
+                     "inetd(%s): using sa_family=%d from getsockname(%"PRI_OVPN_SKT")",
                      proto2ascii(sock->info.proto, sock->info.af, false),
                      local_addr.addr.sa.sa_family, sock->sd);
             }
             else
             {
-                msg(M_WARN, "inetd(%s): getsockname(%d) failed, using AF_INET",
+                msg(M_WARN, "inetd(%s): getsockname(%"PRI_OVPN_SKT") failed, using AF_INET",
                     proto2ascii(sock->info.proto, sock->info.af, false), sock->sd);
             }
         }

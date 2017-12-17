@@ -177,6 +177,16 @@ void tls_ctx_set_options(struct tls_root_ctx *ctx, unsigned int ssl_flags);
 void tls_ctx_restrict_ciphers(struct tls_root_ctx *ctx, const char *ciphers);
 
 /**
+ * Set the TLS certificate profile.  The profile defines which crypto
+ * algorithms may be used in the supplied certificate.
+ *
+ * @param ctx           TLS context to restrict, must be valid.
+ * @param profile       The profile name ('preferred', 'legacy' or 'suiteb').
+ *                      Defaults to 'preferred' if NULL.
+ */
+void tls_ctx_set_cert_profile(struct tls_root_ctx *ctx, const char *profile);
+
+/**
  * Check our certificate notBefore and notAfter fields, and warn if the cert is
  * either not yet valid or has expired.  Note that this is a non-fatal error,
  * since we compare against the system time, which might be incorrect.

@@ -32,6 +32,7 @@
 
 #ifdef ENABLE_CRYPTO
 
+#include "allowed_crypto.h"
 #include "crypto.h"
 #include "error.h"
 #include "integer.h"
@@ -77,7 +78,6 @@ openvpn_encrypt_aead(struct buffer *buf, struct buffer work,
     /* IV, packet-ID and implicit IV required for this mode. */
     ASSERT(ctx->cipher);
     ASSERT(cipher_kt_mode_aead(cipher_kt));
-    ASSERT(opt->flags & CO_USE_IV);
     ASSERT(packet_id_initialized(&opt->packet_id));
 
     gc_init(&gc);
@@ -192,10 +192,7 @@ openvpn_encrypt_v1(struct buffer *buf, struct buffer work,
             if (cipher_kt_mode_cbc(cipher_kt))
             {
                 /* generate pseudo-random IV */
-                if (opt->flags & CO_USE_IV)
-                {
-                    prng_bytes(iv_buf, iv_size);
-                }
+                prng_bytes(iv_buf, iv_size);
 
                 /* Put packet ID in plaintext buffer */
                 if (packet_id_initialized(&opt->packet_id)
@@ -207,28 +204,26 @@ openvpn_encrypt_v1(struct buffer *buf, struct buffer work,
                     goto err;
                 }
             }
+#ifdef ENABLE_OFB_CFB_MODE
             else if (cipher_kt_mode_ofb_cfb(cipher_kt))
             {
                 struct buffer b;
 
-                /* IV and packet-ID required for this mode. */
-                ASSERT(opt->flags & CO_USE_IV);
+                /* packet-ID required for this mode. */
                 ASSERT(packet_id_initialized(&opt->packet_id));
 
                 buf_set_write(&b, iv_buf, iv_size);
                 ASSERT(packet_id_write(&opt->packet_id.send, &b, true, false));
             }
+#endif
             else /* We only support CBC, CFB, or OFB modes right now */
             {
                 ASSERT(0);
             }
 
             /* set the IV pseudo-randomly */
-            if (opt->flags & CO_USE_IV)
-            {
-                ASSERT(buf_write(&work, iv_buf, iv_size));
-                dmsg(D_PACKET_CONTENT, "ENCRYPT IV: %s", format_hex(iv_buf, iv_size, 0, &gc));
-            }
+            ASSERT(buf_write(&work, iv_buf, iv_size));
+            dmsg(D_PACKET_CONTENT, "ENCRYPT IV: %s", format_hex(iv_buf, iv_size, 0, &gc));
 
             dmsg(D_PACKET_CONTENT, "ENCRYPT FROM: %s",
                  format_hex(BPTR(buf), BLEN(buf), 80, &gc));
@@ -358,13 +353,13 @@ crypto_check_replay(struct crypto_options *opt,
     return ret;
 }
 
-/*
- * If (opt->flags & CO_USE_IV) is not NULL, we will read an IV from the packet.
+/**
+ * Unwrap (authenticate, decrypt and check replay protection) AEAD-mode data
+ * channel packets.
  *
  * Set buf->len to 0 and return false on decrypt error.
  *
- * On success, buf is set to point to plaintext, true
- * is returned.
+ * On success, buf is set to point to plaintext, true is returned.
  */
 static bool
 openvpn_decrypt_aead(struct buffer *buf, struct buffer work,
@@ -398,7 +393,6 @@ openvpn_decrypt_aead(struct buffer *buf, struct buffer work,
 
     /* IV and Packet ID required for this mode */
     ASSERT(packet_id_initialized(&opt->packet_id));
-    ASSERT(opt->flags & CO_USE_IV);
 
     /* Combine IV from explicit part from packet and implicit part from context */
     {
@@ -507,12 +501,12 @@ error_exit:
 }
 
 /*
- * If (opt->flags & CO_USE_IV) is not NULL, we will read an IV from the packet.
+ * Unwrap (authenticate, decrypt and check replay protection) CBC, OFB or CFB
+ * mode data channel packets.
  *
  * Set buf->len to 0 and return false on decrypt error.
  *
- * On success, buf is set to point to plaintext, true
- * is returned.
+ * On success, buf is set to point to plaintext, true is returned.
  */
 static bool
 openvpn_decrypt_v1(struct buffer *buf, struct buffer work,
@@ -572,22 +566,14 @@ openvpn_decrypt_v1(struct buffer *buf, struct buffer work,
             /* initialize work buffer with FRAME_HEADROOM bytes of prepend capacity */
             ASSERT(buf_init(&work, FRAME_HEADROOM_ADJ(frame, FRAME_HEADROOM_MARKER_DECRYPT)));
 
-            /* use IV if user requested it */
-            if (opt->flags & CO_USE_IV)
+            /* read the IV from the packet */
+            if (buf->len < iv_size)
             {
-                if (buf->len < iv_size)
-                {
-                    CRYPT_ERROR("missing IV info");
-                }
-                memcpy(iv_buf, BPTR(buf), iv_size);
-                ASSERT(buf_advance(buf, iv_size));
+                CRYPT_ERROR("missing IV info");
             }
-
-            /* show the IV's initial state */
-            if (opt->flags & CO_USE_IV)
-            {
-                dmsg(D_PACKET_CONTENT, "DECRYPT IV: %s", format_hex(iv_buf, iv_size, 0, &gc));
-            }
+            memcpy(iv_buf, BPTR(buf), iv_size);
+            ASSERT(buf_advance(buf, iv_size));
+            dmsg(D_PACKET_CONTENT, "DECRYPT IV: %s", format_hex(iv_buf, iv_size, 0, &gc));
 
             if (buf->len < 1)
             {
@@ -636,12 +622,12 @@ openvpn_decrypt_v1(struct buffer *buf, struct buffer work,
                         have_pin = true;
                     }
                 }
+#ifdef ENABLE_OFB_CFB_MODE
                 else if (cipher_kt_mode_ofb_cfb(cipher_kt))
                 {
                     struct buffer b;
 
-                    /* IV and packet-ID required for this mode. */
-                    ASSERT(opt->flags & CO_USE_IV);
+                    /* packet-ID required for this mode. */
                     ASSERT(packet_id_initialized(&opt->packet_id));
 
                     buf_set_read(&b, iv_buf, iv_size);
@@ -651,6 +637,7 @@ openvpn_decrypt_v1(struct buffer *buf, struct buffer work,
                     }
                     have_pin = true;
                 }
+#endif
                 else /* We only support CBC, CFB, or OFB modes right now */
                 {
                     ASSERT(0);
@@ -717,7 +704,6 @@ openvpn_decrypt(struct buffer *buf, struct buffer work,
 void
 crypto_adjust_frame_parameters(struct frame *frame,
                                const struct key_type *kt,
-                               bool use_iv,
                                bool packet_id,
                                bool packet_id_long_form)
 {
@@ -730,10 +716,7 @@ crypto_adjust_frame_parameters(struct frame *frame,
 
     if (kt->cipher)
     {
-        if (use_iv)
-        {
-            crypto_overhead += cipher_kt_iv_size(kt->cipher);
-        }
+        crypto_overhead += cipher_kt_iv_size(kt->cipher);
 
         if (cipher_kt_mode_aead(kt->cipher))
         {
@@ -775,6 +758,12 @@ init_key_type(struct key_type *kt, const char *ciphername,
     CLEAR(*kt);
     if (strcmp(ciphername, "none") != 0)
     {
+        /* Fox-IT hardening: only accept certain ciphers. */
+        if (!is_allowed_data_channel_cipher(ciphername))
+        {
+            msg (M_FATAL, "Cipher '%s' not allowed", ciphername);
+        }
+
         kt->cipher = cipher_kt_get(translate_cipher_name_from_openvpn(ciphername));
         if (!kt->cipher)
         {
@@ -806,18 +795,19 @@ init_key_type(struct key_type *kt, const char *ciphername,
     }
     else
     {
-        if (warn)
-        {
-            msg(M_WARN, "******* WARNING *******: '--cipher none' was specified. "
-                "This means NO encryption will be performed and tunnelled "
-                "data WILL be transmitted in clear text over the network! "
-                "PLEASE DO RECONSIDER THIS SETTING!");
-        }
+        /* Fox-IT hardening: only accept certain ciphers; none not allowed. */
+        msg (M_FATAL, "Cipher '%s' not allowed", ciphername);
     }
     if (strcmp(authname, "none") != 0)
     {
         if (!aead_cipher) /* Ignore auth for AEAD ciphers */
         {
+            /* Fox-IT hardening: only accept certain digests. */
+            if (!is_allowed_data_channel_digest(authname))
+            {
+                msg (M_FATAL, "Message hash algorithm '%s' not allowed", authname);
+            }
+
             kt->digest = md_kt_get(authname);
             kt->hmac_length = md_kt_size(kt->digest);
 
@@ -829,20 +819,14 @@ init_key_type(struct key_type *kt, const char *ciphername,
     }
     else if (!aead_cipher)
     {
-        if (warn)
-        {
-            msg(M_WARN, "******* WARNING *******: '--auth none' was specified. "
-                "This means no authentication will be performed on received "
-                "packets, meaning you CANNOT trust that the data received by "
-                "the remote side have NOT been manipulated. "
-                "PLEASE DO RECONSIDER THIS SETTING!");
-        }
+        /* Fox-IT hardening: only accept certain digests; 'none' not allowed. */
+        msg (M_FATAL, "Message hash algorithm '%s' not allowed", authname);
     }
 }
 
 /* given a key and key_type, build a key_ctx */
 void
-init_key_ctx(struct key_ctx *ctx, struct key *key,
+init_key_ctx(struct key_ctx *ctx, const struct key *key,
              const struct key_type *kt, int enc,
              const char *prefix)
 {
@@ -1026,15 +1010,14 @@ fixup_key(struct key *key, const struct key_type *kt)
 }
 
 void
-check_replay_iv_consistency(const struct key_type *kt, bool packet_id, bool use_iv)
+check_replay_consistency(const struct key_type *kt, bool packet_id)
 {
     ASSERT(kt);
 
-    if (!(packet_id && use_iv) && (cipher_kt_mode_ofb_cfb(kt->cipher)
-                                   || cipher_kt_mode_aead(kt->cipher)))
+    if (!packet_id && (cipher_kt_mode_ofb_cfb(kt->cipher)
+                       || cipher_kt_mode_aead(kt->cipher)))
     {
-        msg(M_FATAL, "--no-replay or --no-iv cannot be used with a CFB, OFB or "
-            "AEAD mode cipher");
+        msg(M_FATAL, "--no-replay cannot be used with a CFB, OFB or AEAD mode cipher");
     }
 }
 
@@ -1751,6 +1734,13 @@ void
 prng_init(const char *md_name, const int nonce_secret_len_parm)
 {
     prng_uninit();
+
+    /* Fox-IT hardening: only accept certain digests. */
+    if (md_name && !is_allowed_prng_digest(md_name))
+    {
+        msg (M_FATAL, "Message hash algorithm '%s' not allowed for the PRNG", md_name);
+    }
+
     nonce_md = md_name ? md_kt_get(md_name) : NULL;
     if (nonce_md)
     {

@@ -38,8 +38,7 @@
  *  - \b HMAC, covering the ciphertext IV + ciphertext. The HMAC size depends
  *    on the \c \-\-auth option. If \c \-\-auth \c none is specified, there is no
  *    HMAC at all.
- *  - \b Ciphertext \b IV, if not disabled by \c \-\-no-iv. The IV size depends on
- *    the \c \-\-cipher option.
+ *  - \b Ciphertext \b IV. The IV size depends on the \c \-\-cipher option.
  *  - \b Packet \b ID, a 32-bit incrementing packet counter that provides replay
  *    protection (if not disabled by \c \-\-no-replay).
  *  - \b Timestamp, a 32-bit timestamp of the current time.
@@ -123,6 +122,10 @@
 #ifndef CRYPTO_H
 #define CRYPTO_H
 
+#ifdef ENABLE_OFB_CFB_MODE
+#error Fox-IT hardening: OFB/CFB mode disabled
+#endif
+
 #ifdef ENABLE_CRYPTO
 
 #include "crypto_backend.h"
@@ -130,6 +133,11 @@
 #include "buffer.h"
 #include "packet_id.h"
 #include "mtu.h"
+
+/**
+ * Maximum number of bytes read from /dev/random on startup.
+ */
+#define FOX_MIN_PLATFORM_ENTROPY_MAX 32
 
 /** Wrapper struct to pass around SHA256 digests */
 struct sha256_digest {
@@ -248,17 +256,13 @@ struct crypto_options
 #define CO_PACKET_ID_LONG_FORM  (1<<0)
     /**< Bit-flag indicating whether to use
     *   OpenVPN's long packet ID format. */
-#define CO_USE_IV               (1<<1)
-    /**< Bit-flag indicating whether to
-     *   generate a pseudo-random IV for each
-     *   packet being encrypted. */
-#define CO_IGNORE_PACKET_ID     (1<<2)
+#define CO_IGNORE_PACKET_ID     (1<<1)
     /**< Bit-flag indicating whether to ignore
      *   the packet ID of a received packet.
      *   This flag is used during processing
      *   of the first packet received from a
      *   client. */
-#define CO_MUTE_REPLAY_WARNINGS (1<<3)
+#define CO_MUTE_REPLAY_WARNINGS (1<<2)
     /**< Bit-flag indicating not to display
      *   replay warnings. */
     unsigned int flags;         /**< Bit-flags determining behavior of
@@ -287,7 +291,7 @@ int read_passphrase_hash(const char *passphrase_file,
 
 void generate_key_random(struct key *key, const struct key_type *kt);
 
-void check_replay_iv_consistency(const struct key_type *kt, bool packet_id, bool use_iv);
+void check_replay_consistency(const struct key_type *kt, bool packet_id);
 
 bool check_key(struct key *key, const struct key_type *kt);
 
@@ -317,7 +321,7 @@ void init_key_type(struct key_type *kt, const char *ciphername,
  * Key context functions
  */
 
-void init_key_ctx(struct key_ctx *ctx, struct key *key,
+void init_key_ctx(struct key_ctx *ctx, const struct key *key,
                   const struct key_type *kt, int enc,
                   const char *prefix);
 
@@ -421,7 +425,6 @@ bool crypto_check_replay(struct crypto_options *opt,
 /** Calculate crypto overhead and adjust frame to account for that */
 void crypto_adjust_frame_parameters(struct frame *frame,
                                     const struct key_type *kt,
-                                    bool use_iv,
                                     bool packet_id,
                                     bool packet_id_long_form);
 

@@ -37,6 +37,7 @@
 
 #if defined(ENABLE_CRYPTO) && defined(ENABLE_CRYPTO_MBEDTLS)
 
+#include "allowed_crypto.h"
 #include "errlevel.h"
 #include "ssl_backend.h"
 #include "base64.h"
@@ -61,6 +62,41 @@
 #include <mbedtls/oid.h>
 #include <mbedtls/pem.h>
 #include <mbedtls/sha256.h>
+
+static const mbedtls_x509_crt_profile openvpn_x509_crt_profile_legacy =
+{
+    /* Hashes from SHA-1 and above */
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA1 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA224 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA256 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA384 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA512 ),
+    /* Fox-IT hardening: Only RSA */
+    MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSA)
+    | MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSA_ALT)
+    | MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSASSA_PSS),
+    /* Fox-IT hardening: No ECDSA */
+    0,
+    1024,      /* RSA-1024 and larger */
+};
+
+static const mbedtls_x509_crt_profile openvpn_x509_crt_profile_preferred =
+{
+    /* SHA-2 and above */
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA224 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA256 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA384 ) |
+    MBEDTLS_X509_ID_FLAG( MBEDTLS_MD_SHA512 ),
+    /* Fox-IT hardening: Only RSA */
+    MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSA)
+    | MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSA_ALT)
+    | MBEDTLS_X509_ID_FLAG(MBEDTLS_PK_RSASSA_PSS),
+    /* Fox-IT hardening: No ECDSA */
+    0,
+    2048,      /* RSA-2048 and larger */
+};
+
+#define openvpn_x509_crt_profile_suiteb mbedtls_x509_crt_profile_suiteb;
 
 void
 tls_init_lib(void)
@@ -212,8 +248,12 @@ tls_ctx_restrict_ciphers(struct tls_root_ctx *ctx, const char *ciphers)
 
     if (NULL == ciphers)
     {
-        return; /* Nothing to do */
-
+        /* Fox-IT hardening: use default restricted cipher suite list */
+        ctx->allowed_ciphers = malloc(sizeof(allowed_tls_cipher_suites));
+        check_malloc_return(ctx->allowed_ciphers);
+        memcpy (ctx->allowed_ciphers, allowed_tls_cipher_suites,
+                sizeof(allowed_tls_cipher_suites));
+        return;
     }
     ciphers_len = strlen(ciphers);
 
@@ -239,8 +279,16 @@ tls_ctx_restrict_ciphers(struct tls_root_ctx *ctx, const char *ciphers)
     token = strtok(tmp_ciphers, ":");
     while (token)
     {
-        ctx->allowed_ciphers[i] = mbedtls_ssl_get_ciphersuite_id(
-            tls_translate_cipher_name(token));
+        if (is_allowed_tls_cipher(token))
+        {
+            ctx->allowed_ciphers[i] = mbedtls_ssl_get_ciphersuite_id (
+                    tls_translate_cipher_name (token));
+        }
+        else
+        {
+            msg (M_WARN, "WARNING: cipher suite '%s' not allowed, ignoring.", token);
+        }
+
         if (0 != ctx->allowed_ciphers[i])
         {
             i++;
@@ -248,6 +296,28 @@ tls_ctx_restrict_ciphers(struct tls_root_ctx *ctx, const char *ciphers)
         token = strtok(NULL, ":");
     }
     free(tmp_ciphers_orig);
+}
+
+void
+tls_ctx_set_cert_profile(struct tls_root_ctx *ctx, const char *profile)
+{
+    if (!profile || 0 == strcmp(profile, "preferred"))
+    {
+        ctx->cert_profile = openvpn_x509_crt_profile_preferred;
+    }
+    else if (0 == strcmp(profile, "legacy"))
+    {
+        ctx->cert_profile = openvpn_x509_crt_profile_legacy;
+    }
+    else if (0 == strcmp(profile, "suiteb"))
+    {
+        msg (M_FATAL, "ERROR: cert profile '%s' not support by OpenVPN-NL",
+             profile);
+    }
+    else
+    {
+        msg (M_FATAL, "ERROR: Invalid cert profile: %s", profile);
+    }
 }
 
 void
@@ -917,6 +987,8 @@ key_state_ssl_init(struct key_state_ssl *ks_ssl,
     mbedtls_ssl_conf_rng(&ks_ssl->ssl_config, mbedtls_ctr_drbg_random,
                          rand_ctx_get());
 
+    mbedtls_ssl_conf_cert_profile(&ks_ssl->ssl_config, &ssl_ctx->cert_profile);
+
     if (ssl_ctx->allowed_ciphers)
     {
         mbedtls_ssl_conf_ciphersuites(&ks_ssl->ssl_config, ssl_ctx->allowed_ciphers);
@@ -942,14 +1014,8 @@ key_state_ssl_init(struct key_state_ssl *ks_ssl,
                                       ssl_ctx->priv_key));
 
     /* Initialise SSL verification */
-#if P2MP_SERVER
-    if (session->opt->ssl_flags & SSLF_CLIENT_CERT_OPTIONAL)
     {
-        mbedtls_ssl_conf_authmode(&ks_ssl->ssl_config, MBEDTLS_SSL_VERIFY_OPTIONAL);
-    }
-    else if (!(session->opt->ssl_flags & SSLF_CLIENT_CERT_NOT_REQUIRED))
-#endif
-    {
+        /* Fox-IT hardening: client must present certificate. */
         mbedtls_ssl_conf_authmode(&ks_ssl->ssl_config, MBEDTLS_SSL_VERIFY_REQUIRED);
     }
     mbedtls_ssl_conf_verify(&ks_ssl->ssl_config, verify_callback, session);
@@ -1268,21 +1334,24 @@ print_details(struct key_state_ssl *ks_ssl, const char *prefix)
     }
 
     msg(D_HANDSHAKE, "%s%s", s1, s2);
+
+    const char *tls_cipher_suite = mbedtls_ssl_get_ciphersuite(ks_ssl->ctx);
+    const char *tls_digest = strrchr(tls_cipher_suite, '-');
+    if (tls_digest && 0 == strcmp(tls_digest, "-SHA"))
+    {
+        msg (M_WARN, "WARNING: You are using a DEPRECATED SHA-1 cipher suite. "
+             "Support for SHA-1 cipher suites will be dropped per 1-1-2018.");
+    }
 }
 
 void
 show_available_tls_ciphers(const char *cipher_list)
 {
     struct tls_root_ctx tls_ctx;
-    const int *ciphers = mbedtls_ssl_list_ciphersuites();
+    const int *ciphers = allowed_tls_cipher_suites;
 
     tls_ctx_server_new(&tls_ctx);
     tls_ctx_restrict_ciphers(&tls_ctx, cipher_list);
-
-    if (tls_ctx.allowed_ciphers)
-    {
-        ciphers = tls_ctx.allowed_ciphers;
-    }
 
 #ifndef ENABLE_SMALL
     printf("Available TLS Ciphers,\n");

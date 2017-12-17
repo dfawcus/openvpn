@@ -485,9 +485,11 @@ typedef unsigned short sa_family_t;
 #ifdef _WIN32
 #define SOCKET_UNDEFINED (INVALID_SOCKET)
 typedef SOCKET socket_descriptor_t;
+#define PRI_OVPN_SKT PRIuPTR
 #else
 #define SOCKET_UNDEFINED (-1)
 typedef int socket_descriptor_t;
+#define PRI_OVPN_SKT "d"
 #endif
 
 static inline int

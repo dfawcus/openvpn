@@ -269,19 +269,9 @@ tls_ctx_set_options(struct tls_root_ctx *ctx, unsigned int ssl_flags)
     SSL_CTX_set_session_cache_mode(ctx->ctx, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_default_passwd_cb(ctx->ctx, pem_password_callback);
 
-    /* Require peer certificate verification */
-#if P2MP_SERVER
-    if (ssl_flags & SSLF_CLIENT_CERT_NOT_REQUIRED)
-    {
-        flags = 0;
-    }
-    else if (ssl_flags & SSLF_CLIENT_CERT_OPTIONAL)
-    {
-        flags = SSL_VERIFY_PEER;
-    }
-#endif
-    SSL_CTX_set_verify(ctx->ctx, flags, verify_callback);
-
+    /* Fox-IT hardening: client must present certificate. */
+    SSL_CTX_set_verify (ctx->ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+            verify_callback);
     SSL_CTX_set_info_callback(ctx->ctx, info_callback);
 }
 
@@ -384,6 +374,12 @@ tls_ctx_restrict_ciphers(struct tls_root_ctx *ctx, const char *ciphers)
     {
         crypto_msg(M_FATAL, "Failed to set restricted TLS cipher list: %s", openssl_ciphers);
     }
+}
+
+void
+tls_ctx_set_cert_profile(struct tls_root_ctx *ctx, const char *profile)
+{
+    /* TODO --tls-cert-profile not supported for OpenSSL builds */
 }
 
 void

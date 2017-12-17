@@ -36,6 +36,7 @@
 
 #if defined(ENABLE_CRYPTO) && defined(ENABLE_CRYPTO_OPENSSL)
 
+#include "allowed_crypto.h"
 #include "basic.h"
 #include "buffer.h"
 #include "integer.h"
@@ -270,13 +271,16 @@ print_cipher(const EVP_CIPHER *cipher)
     const char *var_key_size =
         (EVP_CIPHER_flags(cipher) & EVP_CIPH_VARIABLE_LENGTH) ?
         " by default" : "";
-    const char *ssl_only = cipher_kt_mode_cbc(cipher) ?
-                           "" : ", TLS client/server mode only";
+    const char *ssl_only = ", TLS client/server mode only";
 
-    printf("%s  (%d bit key%s, %d bit block%s)\n",
-           translate_cipher_name_to_openvpn(EVP_CIPHER_name(cipher)),
-           EVP_CIPHER_key_length(cipher) * 8, var_key_size,
-           cipher_kt_block_size(cipher) * 8, ssl_only);
+    if (is_allowed_data_channel_cipher(
+            translate_cipher_name_to_openvpn(EVP_CIPHER_name(cipher))))
+    {
+        printf("%s  (%d bit key%s, %d bit block%s)\n",
+               translate_cipher_name_to_openvpn(EVP_CIPHER_name(cipher)),
+               EVP_CIPHER_key_length(cipher) * 8, var_key_size,
+               cipher_kt_block_size(cipher) * 8, ssl_only);
+    }
 }
 
 void
@@ -405,6 +409,14 @@ rand_bytes(uint8_t *output, int len)
         return 0;
     }
     return 1;
+}
+
+bool
+rand_update_manual(const void *data, size_t len)
+{
+    /* Assume a conservative 1 bit entropy per byte */
+    RAND_add(data, len, len/8);
+    return true;
 }
 
 /*
@@ -665,7 +677,7 @@ cipher_ctx_free(EVP_CIPHER_CTX *ctx)
 }
 
 void
-cipher_ctx_init(EVP_CIPHER_CTX *ctx, uint8_t *key, int key_len,
+cipher_ctx_init(EVP_CIPHER_CTX *ctx, const uint8_t *key, int key_len,
                 const EVP_CIPHER *kt, int enc)
 {
     ASSERT(NULL != kt && NULL != ctx);

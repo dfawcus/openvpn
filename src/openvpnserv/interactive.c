@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <sddl.h>
 #include <shellapi.h>
+#include <mstcpip.h>
 
 #ifdef HAVE_VERSIONHELPERS_H
 #include <versionhelpers.h>
@@ -370,12 +371,12 @@ ValidateOptions(HANDLE pipe, const WCHAR *workdir, const WCHAR *options)
     BOOL ret = FALSE;
     int i;
     const WCHAR *msg1 = L"You have specified a config file location (%s relative to %s)"
-                        " that requires admin approval. This error may be avoided"
-                        " by adding your account to the \"%s\" group";
+                        L" that requires admin approval. This error may be avoided"
+                        L" by adding your account to the \"%s\" group";
 
     const WCHAR *msg2 = L"You have specified an option (%s) that may be used"
-                        " only with admin approval. This error may be avoided"
-                        " by adding your account to the \"%s\" group";
+                        L" only with admin approval. This error may be avoided"
+                        L" by adding your account to the \"%s\" group";
 
     argv = CommandLineToArgvW(options, &argc);
 
@@ -465,6 +466,13 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     }
 
     size = bytes / sizeof(*data);
+    if (size == 0)
+    {
+        MsgToEventLog(M_SYSERR, TEXT("malformed startup data: 1 byte received"));
+        ReturnError(pipe, ERROR_STARTUP_DATA, L"GetStartupData", 1, &exit_event);
+        goto out;
+    }
+
     data = malloc(bytes);
     if (data == NULL)
     {
@@ -549,23 +557,6 @@ InterfaceLuid(const char *iface_name, PNET_LUID luid)
     LPWSTR wide_name;
     int n;
 
-    typedef NETIO_STATUS WINAPI (*ConvertInterfaceAliasToLuidFn) (LPCWSTR, PNET_LUID);
-    static ConvertInterfaceAliasToLuidFn ConvertInterfaceAliasToLuid = NULL;
-    if (!ConvertInterfaceAliasToLuid)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        ConvertInterfaceAliasToLuid = (ConvertInterfaceAliasToLuidFn) GetProcAddress(iphlpapi, "ConvertInterfaceAliasToLuid");
-        if (!ConvertInterfaceAliasToLuid)
-        {
-            return GetLastError();
-        }
-    }
-
     n = MultiByteToWideChar(CP_UTF8, 0, iface_name, -1, NULL, 0);
     wide_name = malloc(n * sizeof(WCHAR));
     MultiByteToWideChar(CP_UTF8, 0, iface_name, -1, wide_name, n);
@@ -584,24 +575,6 @@ CmpAddress(LPVOID item, LPVOID address)
 static DWORD
 DeleteAddress(PMIB_UNICASTIPADDRESS_ROW addr_row)
 {
-    typedef NETIOAPI_API (*DeleteUnicastIpAddressEntryFn) (const PMIB_UNICASTIPADDRESS_ROW);
-    static DeleteUnicastIpAddressEntryFn DeleteUnicastIpAddressEntry = NULL;
-
-    if (!DeleteUnicastIpAddressEntry)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        DeleteUnicastIpAddressEntry = (DeleteUnicastIpAddressEntryFn) GetProcAddress(iphlpapi, "DeleteUnicastIpAddressEntry");
-        if (!DeleteUnicastIpAddressEntry)
-        {
-            return GetLastError();
-        }
-    }
-
     return DeleteUnicastIpAddressEntry(addr_row);
 }
 
@@ -611,32 +584,6 @@ HandleAddressMessage(address_message_t *msg, undo_lists_t *lists)
     DWORD err;
     PMIB_UNICASTIPADDRESS_ROW addr_row;
     BOOL add = msg->header.type == msg_add_address;
-
-    typedef NETIOAPI_API (*CreateUnicastIpAddressEntryFn) (const PMIB_UNICASTIPADDRESS_ROW);
-    typedef NETIOAPI_API (*InitializeUnicastIpAddressEntryFn) (PMIB_UNICASTIPADDRESS_ROW);
-    static CreateUnicastIpAddressEntryFn CreateUnicastIpAddressEntry = NULL;
-    static InitializeUnicastIpAddressEntryFn InitializeUnicastIpAddressEntry = NULL;
-
-    if (!CreateUnicastIpAddressEntry || !InitializeUnicastIpAddressEntry)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        CreateUnicastIpAddressEntry = (CreateUnicastIpAddressEntryFn) GetProcAddress(iphlpapi, "CreateUnicastIpAddressEntry");
-        if (!CreateUnicastIpAddressEntry)
-        {
-            return GetLastError();
-        }
-
-        InitializeUnicastIpAddressEntry = (InitializeUnicastIpAddressEntryFn) GetProcAddress(iphlpapi, "InitializeUnicastIpAddressEntry");
-        if (!InitializeUnicastIpAddressEntry)
-        {
-            return GetLastError();
-        }
-    }
 
     addr_row = malloc(sizeof(*addr_row));
     if (addr_row == NULL)
@@ -706,24 +653,6 @@ CmpRoute(LPVOID item, LPVOID route)
 static DWORD
 DeleteRoute(PMIB_IPFORWARD_ROW2 fwd_row)
 {
-    typedef NETIOAPI_API (*DeleteIpForwardEntry2Fn) (PMIB_IPFORWARD_ROW2);
-    static DeleteIpForwardEntry2Fn DeleteIpForwardEntry2 = NULL;
-
-    if (!DeleteIpForwardEntry2)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        DeleteIpForwardEntry2 = (DeleteIpForwardEntry2Fn) GetProcAddress(iphlpapi, "DeleteIpForwardEntry2");
-        if (!DeleteIpForwardEntry2)
-        {
-            return GetLastError();
-        }
-    }
-
     return DeleteIpForwardEntry2(fwd_row);
 }
 
@@ -733,24 +662,6 @@ HandleRouteMessage(route_message_t *msg, undo_lists_t *lists)
     DWORD err;
     PMIB_IPFORWARD_ROW2 fwd_row;
     BOOL add = msg->header.type == msg_add_route;
-
-    typedef NETIOAPI_API (*CreateIpForwardEntry2Fn) (PMIB_IPFORWARD_ROW2);
-    static CreateIpForwardEntry2Fn CreateIpForwardEntry2 = NULL;
-
-    if (!CreateIpForwardEntry2)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        CreateIpForwardEntry2 = (CreateIpForwardEntry2Fn) GetProcAddress(iphlpapi, "CreateIpForwardEntry2");
-        if (!CreateIpForwardEntry2)
-        {
-            return GetLastError();
-        }
-    }
 
     fwd_row = malloc(sizeof(*fwd_row));
     if (fwd_row == NULL)
@@ -820,36 +731,12 @@ out:
 static DWORD
 HandleFlushNeighborsMessage(flush_neighbors_message_t *msg)
 {
-    typedef NETIOAPI_API (*FlushIpNetTable2Fn) (ADDRESS_FAMILY, NET_IFINDEX);
-    static FlushIpNetTable2Fn flush_fn = NULL;
-
     if (msg->family == AF_INET)
     {
         return FlushIpNetTable(msg->iface.index);
     }
 
-    if (!flush_fn)
-    {
-        HMODULE iphlpapi = GetModuleHandle(TEXT("iphlpapi.dll"));
-        if (iphlpapi == NULL)
-        {
-            return GetLastError();
-        }
-
-        flush_fn = (FlushIpNetTable2Fn) GetProcAddress(iphlpapi, "FlushIpNetTable2");
-        if (!flush_fn)
-        {
-            if (GetLastError() == ERROR_PROC_NOT_FOUND)
-            {
-                return WSAEPFNOSUPPORT;
-            }
-            else
-            {
-                return GetLastError();
-            }
-        }
-    }
-    return flush_fn(msg->family, msg->iface.index);
+    return FlushIpNetTable2(msg->family, msg->iface.index);
 }
 
 static void
@@ -1890,6 +1777,11 @@ FreeWaitHandles(LPHANDLE h)
     free(h);
 }
 
+static BOOL
+CmpHandle(LPVOID item, LPVOID hnd)
+{
+    return item == hnd;
+}
 
 VOID WINAPI
 ServiceStartInteractive(DWORD dwArgc, LPTSTR *lpszArgv)
@@ -1900,11 +1792,6 @@ ServiceStartInteractive(DWORD dwArgc, LPTSTR *lpszArgv)
     list_item_t *threads = NULL;
     PHANDLE handles = NULL;
     DWORD handle_count;
-    BOOL
-    CmpHandle(LPVOID item, LPVOID hnd)
-    {
-        return item == hnd;
-    }
 
     service = RegisterServiceCtrlHandlerEx(interactive_service.name, ServiceCtrlInteractive, &status);
     if (!service)

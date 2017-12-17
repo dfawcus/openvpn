@@ -435,11 +435,6 @@ static const char usage_message[] =
     "                  Only valid in a client-specific config file.\n"
     "--disable       : Client is disabled.\n"
     "                  Only valid in a client-specific config file.\n"
-    "--client-cert-not-required : (DEPRECATED) Don't require client certificate, client\n"
-    "                  will authenticate using username/password.\n"
-    "--verify-client-cert [none|optional|require] : perform no, optional or\n"
-    "                  mandatory client certificate verification.\n"
-    "                  Default is to require the client to supply a certificate.\n"
     "--username-as-common-name  : For auth-user-pass authentication, use\n"
     "                  the authenticated username as the common name,\n"
     "                  rather than the common name from the client cert.\n"
@@ -522,12 +517,7 @@ static const char usage_message[] =
     "\n"
     "Data Channel Encryption Options (must be compatible between peers):\n"
     "(These options are meaningful for both Static Key & TLS-mode)\n"
-    "--secret f [d]  : Enable Static Key encryption mode (non-TLS).\n"
-    "                  Use shared secret file f, generate with --genkey.\n"
-    "                  The optional d parameter controls key directionality.\n"
-    "                  If d is specified, use separate keys for each\n"
-    "                  direction, set d=0 on one side of the connection,\n"
-    "                  and d=1 on the other side.\n"
+    /* Fox-IT hardening: removed secret option. */
     "--auth alg      : Authenticate packets with HMAC using message\n"
     "                  digest algorithm alg (default=%s).\n"
     "                  (usually adds 16 or 20 bytes per packet)\n"
@@ -537,6 +527,7 @@ static const char usage_message[] =
     "                  Set alg=none to disable encryption.\n"
     "--ncp-ciphers list : List of ciphers that are allowed to be negotiated.\n"
     "--ncp-disable   : Disable cipher negotiation.\n"
+    "--ncp-enable    : Enable cipher negotiation.\n"
     "--prng alg [nsl] : For PRNG, use digest algorithm alg, and\n"
     "                   nonce_secret_len=nsl.  Set alg=none to disable PRNG.\n"
 #ifdef HAVE_EVP_CIPHER_CTX_SET_KEY_LENGTH
@@ -546,12 +537,10 @@ static const char usage_message[] =
 #ifndef ENABLE_CRYPTO_MBEDTLS
     "--engine [name] : Enable OpenSSL hardware crypto engine functionality.\n"
 #endif
-    "--no-replay     : (DEPRECATED) Disable replay protection.\n"
     "--mute-replay-warnings : Silence the output of replay warnings to log file.\n"
     "--replay-window n [t]  : Use a replay protection sliding window of size n\n"
     "                         and a time window of t seconds.\n"
     "                         Default n=%d t=%d\n"
-    "--no-iv         : Disable cipher IV -- only allowed with CBC mode ciphers.\n"
     "--replay-persist file : Persist replay-protection state across sessions\n"
     "                  using file.\n"
     "--test-crypto   : Run a self-test of crypto features enabled.\n"
@@ -559,6 +548,10 @@ static const char usage_message[] =
 #ifdef ENABLE_PREDICTION_RESISTANCE
     "--use-prediction-resistance: Enable prediction resistance on the random\n"
     "                             number generator.\n"
+#endif
+#ifdef TARGET_LINUX
+    "--min-platform-entropy: The minimum number of bytes of /dev/random\n"
+    "                        entropy required at startup.\n"
 #endif
     "\n"
     "TLS Key Negotiation Options:\n"
@@ -600,6 +593,8 @@ static const char usage_message[] =
 #endif
     "--tls-cipher l  : A list l of allowable TLS ciphers separated by : (optional).\n"
     "                : Use --show-tls to see a list of supported TLS ciphers.\n"
+    "--tls-cert-profile p : Set the allowed certificate crypto algorithm profile\n"
+    "                  (default=%s).\n"
     "--tls-timeout n : Packet retransmit timeout on TLS control channel\n"
     "                  if no ACK from remote within n seconds (default=%d).\n"
     "--reneg-bytes n : Renegotiate data chan. key after n bytes sent and recvd.\n"
@@ -743,7 +738,7 @@ static const char usage_message[] =
     "\n"
     "Generate a random key (only for non-TLS static key encryption mode):\n"
     "--genkey        : Generate a random key to be used as a shared secret,\n"
-    "                  for use with the --secret option.\n"
+    "                  for use with the --tls-auth or --tls-crypt option.\n"
     "--secret file   : Write key to file.\n"
 #endif                          /* ENABLE_CRYPTO */
 #ifdef ENABLE_FEATURE_TUN_PERSIST
@@ -850,30 +845,34 @@ init_options(struct options *o, const bool init_gc)
     o->scheduled_exit_interval = 5;
 #endif
 #ifdef ENABLE_CRYPTO
-    o->ciphername = "BF-CBC";
+    o->ciphername = "AES-256-CBC";
 #ifdef HAVE_AEAD_CIPHER_MODES /* IV_NCP=2 requires GCM support */
     o->ncp_enabled = true;
 #else
     o->ncp_enabled = false;
 #endif
-    o->ncp_ciphers = "AES-256-GCM:AES-128-GCM";
-    o->authname = "SHA1";
-    o->prng_hash = "SHA1";
+    o->ncp_ciphers = "AES-256-GCM";
+    o->authname = "SHA256";
+    o->prng_hash = "SHA256";
     o->prng_nonce_secret_len = 16;
     o->replay = true;
     o->replay_window = DEFAULT_SEQ_BACKTRACK;
     o->replay_time = DEFAULT_TIME_BACKTRACK;
-    o->use_iv = true;
     o->key_direction = KEY_DIRECTION_BIDIRECTIONAL;
 #ifdef ENABLE_PREDICTION_RESISTANCE
     o->use_prediction_resistance = false;
 #endif
+    o->min_platform_entropy = 16;
     o->key_method = 2;
     o->tls_timeout = 2;
     o->renegotiate_bytes = -1;
     o->renegotiate_seconds = 3600;
     o->handshake_window = 60;
     o->transition_window = 3600;
+    o->cipher_list = "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384:"
+                     "TLS-DHE-RSA-WITH-AES-256-GCM-SHA384:"
+                     "TLS-DHE-RSA-WITH-AES-256-CBC-SHA256";
+    o->tls_cert_profile = "preferred";
     o->ecdh_curve = NULL;
 #ifdef ENABLE_X509ALTUSERNAME
     o->x509_username_field = X509_USERNAME_FIELD_DEFAULT;
@@ -1716,11 +1715,11 @@ show_settings(const struct options *o)
     SHOW_INT(replay_window);
     SHOW_INT(replay_time);
     SHOW_STR(packet_id_file);
-    SHOW_BOOL(use_iv);
     SHOW_BOOL(test_crypto);
 #ifdef ENABLE_PREDICTION_RESISTANCE
     SHOW_BOOL(use_prediction_resistance);
 #endif
+    SHOW_INT(min_platform_entropy);
 
     SHOW_BOOL(tls_server);
     SHOW_BOOL(tls_client);
@@ -1753,6 +1752,7 @@ show_settings(const struct options *o)
     SHOW_STR(cryptoapi_cert);
 #endif
     SHOW_STR(cipher_list);
+    SHOW_STR(tls_cert_profile);
     SHOW_STR(tls_verify);
     SHOW_STR(tls_export_cert);
     SHOW_INT(verify_x509_type);
@@ -2372,10 +2372,6 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
                                || PLUGIN_OPTION_LIST(options)
                                || MAN_CLIENT_AUTH_ENABLED(options));
             const char *postfix = "must be used with --management-client-auth, an --auth-user-pass-verify script, or plugin";
-            if ((options->ssl_flags & (SSLF_CLIENT_CERT_NOT_REQUIRED|SSLF_CLIENT_CERT_OPTIONAL)) && !ccnr)
-            {
-                msg(M_USAGE, "--verify-client-cert none|optional %s", postfix);
-            }
             if ((options->ssl_flags & SSLF_USERNAME_AS_COMMON_NAME) && !ccnr)
             {
                 msg(M_USAGE, "--username-as-common-name %s", postfix);
@@ -2433,10 +2429,6 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
         {
             msg(M_USAGE, "--connect-freq requires --mode server");
         }
-        if (options->ssl_flags & (SSLF_CLIENT_CERT_NOT_REQUIRED|SSLF_CLIENT_CERT_OPTIONAL))
-        {
-            msg(M_USAGE, "--client-cert-not-required and --verify-client-cert require --mode server");
-        }
         if (options->ssl_flags & SSLF_USERNAME_AS_COMMON_NAME)
         {
             msg(M_USAGE, "--username-as-common-name requires --mode server");
@@ -2487,14 +2479,6 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
     {
         msg(M_USAGE, "NCP cipher list contains unsupported ciphers.");
     }
-    if (options->ncp_enabled && !options->use_iv)
-    {
-        msg(M_USAGE, "--no-iv not allowed when NCP is enabled.");
-    }
-    if (!options->use_iv)
-    {
-        msg(M_WARN, "WARNING: --no-iv is deprecated and will be removed in 2.5");
-    }
 
     if (options->keysize)
     {
@@ -2523,13 +2507,6 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
         +(options->shared_secret_file != NULL) > 1)
     {
         msg(M_USAGE, "specify only one of --tls-server, --tls-client, or --secret");
-    }
-
-    if (options->ssl_flags & (SSLF_CLIENT_CERT_NOT_REQUIRED|SSLF_CLIENT_CERT_OPTIONAL))
-    {
-        msg(M_WARN, "WARNING: POTENTIALLY DANGEROUS OPTION "
-            "--verify-client-cert none|optional (or --client-cert-not-required) "
-            "may accept clients which do not present a certificate");
     }
 
     if (options->key_method == 1)
@@ -2745,6 +2722,7 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
         MUST_BE_UNDEF(pkcs12_file);
 #endif
         MUST_BE_UNDEF(cipher_list);
+        MUST_BE_UNDEF(tls_cert_profile);
         MUST_BE_UNDEF(tls_verify);
         MUST_BE_UNDEF(tls_export_cert);
         MUST_BE_UNDEF(verify_x509_name);
@@ -3478,8 +3456,8 @@ calc_options_string_link_mtu(const struct options *o, const struct frame *frame)
         init_key_type(&fake_kt, o->ciphername, o->authname, o->keysize, true,
                       false);
         frame_add_to_extra_frame(&fake_frame, -(crypto_max_overhead()));
-        crypto_adjust_frame_parameters(&fake_frame, &fake_kt, o->use_iv,
-                                       o->replay, cipher_kt_mode_ofb_cfb(fake_kt.cipher));
+        crypto_adjust_frame_parameters(&fake_frame, &fake_kt, o->replay,
+                                       cipher_kt_mode_ofb_cfb(fake_kt.cipher));
         frame_finalize(&fake_frame, o->ce.link_mtu_defined, o->ce.link_mtu,
                        o->ce.tun_mtu_defined, o->ce.tun_mtu);
         msg(D_MTU_DEBUG, "%s: link-mtu %u -> %d", __func__, (unsigned int) link_mtu,
@@ -3523,8 +3501,6 @@ calc_options_string_link_mtu(const struct options *o, const struct frame *frame)
  * --auth
  * --keysize
  * --secret
- * --no-replay
- * --no-iv
  *
  * SSL Options:
  *
@@ -3638,8 +3614,7 @@ options_string(const struct options *o,
     {
         struct key_type kt;
 
-        ASSERT((o->shared_secret_file != NULL)
-               + (TLS_CLIENT == true)
+        ASSERT((TLS_CLIENT == true)
                + (TLS_SERVER == true)
                <= 1);
 
@@ -3653,14 +3628,6 @@ options_string(const struct options *o,
         if (o->shared_secret_file)
         {
             buf_printf(&out, ",secret");
-        }
-        if (!o->replay)
-        {
-            buf_printf(&out, ",no-replay");
-        }
-        if (!o->use_iv)
-        {
-            buf_printf(&out, ",no-iv");
         }
 
 #ifdef ENABLE_PREDICTION_RESISTANCE
@@ -4107,7 +4074,7 @@ usage(void)
             o.verbosity,
             o.authname, o.ciphername,
             o.replay_window, o.replay_time,
-            o.tls_timeout, o.renegotiate_seconds,
+            o.tls_cert_profile, o.tls_timeout, o.renegotiate_seconds,
             o.handshake_window, o.transition_window);
 #else  /* ifdef ENABLE_CRYPTO */
     fprintf(fp, usage_message,
@@ -4845,11 +4812,13 @@ verify_permission(const char *name,
 #ifndef ENABLE_SMALL
     /* Check if this options is allowed in connection block,
      * but we are currently not in a connection block
+     * unless this is a pushed option.
      * Parsing a connection block uses a temporary options struct without
      * connection_list
      */
 
-    if ((type & OPT_P_CONNECTION) && options->connection_list)
+    if ((type & OPT_P_CONNECTION) && options->connection_list
+        && !(allowed & OPT_P_PULL_MODE))
     {
         if (file)
         {
@@ -5209,6 +5178,8 @@ add_option(struct options *options,
         else if (streq(p[1], "server"))
         {
             options->mode = MODE_SERVER;
+            /* Fox-IT hardening: disable NCP by default for servers */
+            options->ncp_enabled = false;
         }
 #endif
         else
@@ -5902,7 +5873,7 @@ add_option(struct options *options,
         VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_CONNECTION);
         options->ce.remote_port = p[1];
     }
-    else if (streq(p[0], "bind") && !p[1])
+    else if (streq(p[0], "bind") && !p[2])
     {
         VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_CONNECTION);
         options->ce.bind_defined = true;
@@ -6675,36 +6646,6 @@ add_option(struct options *options,
     {
         VERIFY_PERMISSION(OPT_P_INHERIT);
         options->max_routes_per_client = max_int(atoi(p[1]), 1);
-    }
-    else if (streq(p[0], "client-cert-not-required") && !p[1])
-    {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-        options->ssl_flags |= SSLF_CLIENT_CERT_NOT_REQUIRED;
-        msg(M_WARN, "DEPRECATED OPTION: --client-cert-not-required, use --verify-client-cert instead");
-    }
-    else if (streq(p[0], "verify-client-cert") && !p[2])
-    {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-
-        /* Reset any existing flags */
-        options->ssl_flags &= ~SSLF_CLIENT_CERT_OPTIONAL;
-        options->ssl_flags &= ~SSLF_CLIENT_CERT_NOT_REQUIRED;
-        if (p[1])
-        {
-            if (streq(p[1], "none"))
-            {
-                options->ssl_flags |= SSLF_CLIENT_CERT_NOT_REQUIRED;
-            }
-            else if (streq(p[1], "optional"))
-            {
-                options->ssl_flags |= SSLF_CLIENT_CERT_OPTIONAL;
-            }
-            else if (!streq(p[1], "require"))
-            {
-                msg(msglevel, "parameter to --verify-client-cert must be 'none', 'optional' or 'require'");
-                goto err;
-            }
-        }
     }
     else if (streq(p[0], "username-as-common-name") && !p[1])
     {
@@ -7483,25 +7424,12 @@ add_option(struct options *options,
     else if (streq(p[0], "secret") && p[1] && !p[3])
     {
         VERIFY_PERMISSION(OPT_P_GENERAL);
-        if (streq(p[1], INLINE_FILE_TAG) && p[2])
+        if ((streq(p[1], INLINE_FILE_TAG) && p[2]) || (p[2]))
         {
-            options->shared_secret_file_inline = p[2];
+            msg (msglevel, "ERROR: static key mode (--secret) not supported.");
+            goto err;
         }
-        else if (p[2])
-        {
-            int key_direction;
-
-            key_direction = ascii2keydirection(msglevel, p[2]);
-            if (key_direction >= 0)
-            {
-                options->key_direction = key_direction;
-            }
-            else
-            {
-                goto err;
-            }
-        }
-        options->shared_secret_file = p[1];
+        options->shared_secret_file = p[1]; /* Needed for --test-crypto */
     }
     else if (streq(p[0], "genkey") && !p[1])
     {
@@ -7528,6 +7456,11 @@ add_option(struct options *options,
         VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_INSTANCE);
         options->ncp_enabled = false;
     }
+    else if (streq(p[0], "ncp-enable") && !p[1])
+    {
+        VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_INSTANCE);
+        options->ncp_enabled = true;
+    }
     else if (streq(p[0], "prng") && p[1] && !p[3])
     {
         VERIFY_PERMISSION(OPT_P_GENERAL);
@@ -7553,11 +7486,6 @@ add_option(struct options *options,
                 goto err;
             }
         }
-    }
-    else if (streq(p[0], "no-replay") && !p[1])
-    {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-        options->replay = false;
     }
     else if (streq(p[0], "replay-window") && !p[3])
     {
@@ -7606,8 +7534,8 @@ add_option(struct options *options,
     }
     else if (streq(p[0], "no-iv") && !p[1])
     {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-        options->use_iv = false;
+        msg(msglevel,
+            "--no-iv is no longer supported. Remove it from client and server configs.");
     }
     else if (streq(p[0], "replay-persist") && p[1] && !p[2])
     {
@@ -7653,6 +7581,41 @@ add_option(struct options *options,
     {
         VERIFY_PERMISSION(OPT_P_GENERAL);
         options->use_prediction_resistance = true;
+    }
+#endif
+    else if (streq (p[0], "min-platform-entropy"))
+    {
+        VERIFY_PERMISSION (OPT_P_GENERAL);
+        int min_platform_entropy = strtol(p[1], NULL, 10);
+
+        if (min_platform_entropy < 0)
+        {
+            msg (msglevel, "min-platform-entropy must be positive: %s", p[1]);
+            goto err;
+        }
+        if (min_platform_entropy > FOX_MIN_PLATFORM_ENTROPY_MAX)
+        {
+            msg (M_WARN,
+                 "Warning: min-platform-entropy too high, capping to %u",
+                 FOX_MIN_PLATFORM_ENTROPY_MAX);
+            min_platform_entropy = FOX_MIN_PLATFORM_ENTROPY_MAX;
+        }
+        options->min_platform_entropy = min_platform_entropy;
+    }
+#ifndef WIN32
+    else if (streq (p[0], "use-urandom"))
+    {
+        VERIFY_PERMISSION (OPT_P_GENERAL);
+        msg (M_WARN,
+             "Warning: --use-urandom is deprecated, remove from your config.");
+    }
+#endif
+#ifndef WIN32
+    else if (streq (p[0], "use-urandom"))
+    {
+        VERIFY_PERMISSION (OPT_P_GENERAL);
+        msg (M_WARN,
+             "Warning: --use-urandom is deprecated, remove from your config.");
     }
 #endif
     else if (streq(p[0], "show-tls") && !p[1])
@@ -7848,6 +7811,13 @@ add_option(struct options *options,
         VERIFY_PERMISSION(OPT_P_GENERAL);
         options->cipher_list = p[1];
     }
+#ifdef ENABLE_CRYPTO_MBEDTLS
+    else if (streq(p[0], "tls-cert-profile") && p[1] && !p[2])
+    {
+        VERIFY_PERMISSION(OPT_P_GENERAL);
+        options->tls_cert_profile = p[1];
+    }
+#endif
     else if (streq(p[0], "crl-verify") && p[1] && ((p[2] && streq(p[2], "dir"))
                                                    || (p[2] && streq(p[1], INLINE_FILE_TAG) ) || !p[2]) && !p[3])
     {

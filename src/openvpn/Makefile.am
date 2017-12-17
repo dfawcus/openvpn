@@ -38,6 +38,7 @@ endif
 sbin_PROGRAMS = openvpn
 
 openvpn_SOURCES = \
+	allowed_crypto.c allowed_crypto.h \
 	argv.c argv.h \
 	base64.c base64.h \
 	basic.h \

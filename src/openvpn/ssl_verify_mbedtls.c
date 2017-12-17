@@ -154,6 +154,24 @@ backend_x509_get_username(char *cn, int cn_len,
 }
 
 char *
+backend_x509_get_issuer(mbedtls_x509_crt *cert, struct gc_arena *gc)
+{
+  char tmp_issuer[MAX_SUBJECT_LENGTH] = {0};
+  char *issuer = NULL;
+
+  int ret = 0;
+
+  ret = mbedtls_x509_dn_gets(tmp_issuer, MAX_SUBJECT_LENGTH-1, &cert->issuer);
+  if (ret > 0)
+    {
+      /* Allocate the required space for the issuer */
+      issuer = string_alloc(tmp_issuer, gc);
+    }
+
+  return issuer;
+}
+
+char *
 backend_x509_get_serial(mbedtls_x509_crt *cert, struct gc_arena *gc)
 {
     char *buf = NULL;
@@ -236,7 +254,8 @@ x509_get_subject(mbedtls_x509_crt *cert, struct gc_arena *gc)
     int ret = 0;
 
     ret = mbedtls_x509_dn_gets( tmp_subject, MAX_SUBJECT_LENGTH-1, &cert->subject );
-    if (ret > 0)
+    /* Reject subjects with null characters, should be C string compatible */
+    if (ret > 0 && ret == strlen(tmp_subject))
     {
         /* Allocate the required space for the subject */
         subject = string_alloc(tmp_subject, gc);

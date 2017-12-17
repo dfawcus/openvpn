@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# openvpn       This shell script takes care of starting and stopping
+# openvpn-nl       This shell script takes care of starting and stopping
 #               openvpn on RedHat or other chkconfig-based system.
 #
 # chkconfig: 345 24 76
@@ -66,7 +66,7 @@
 
 # Location of openvpn binary
 openvpn=""
-openvpn_locations="/usr/sbin/openvpn /usr/local/sbin/openvpn"
+openvpn_locations="/usr/sbin/openvpn-nl /usr/local/sbin/openvpn-nl"
 for location in $openvpn_locations
 do
   if [ -f "$location" ]
@@ -76,13 +76,13 @@ do
 done
 
 # Lockfile
-lock="/var/lock/subsys/openvpn"
+lock="/var/lock/subsys/openvpn-nl"
 
 # PID directory
-piddir="/var/run/openvpn"
+piddir="/var/run/openvpn-nl"
 
 # Our working directory
-work=/etc/openvpn
+work=/etc/openvpn-nl
 
 # Source function library.
 . /etc/rc.d/init.d/functions
@@ -100,14 +100,14 @@ fi
 # Check that binary exists
 if ! [ -f  $openvpn ] 
 then
-  echo "openvpn binary not found"
+  echo "openvpn-nl binary not found"
   exit 0
 fi
 
 # See how we were called.
 case "$1" in
   start)
-	echo -n $"Starting openvpn: "
+	echo -n $"Starting openvpn-nl: "
 
 	/sbin/modprobe tun >/dev/null 2>&1
 
@@ -170,7 +170,7 @@ case "$1" in
 	fi
 	;;
   stop)
-	echo -n $"Shutting down openvpn: "
+	echo -n $"Shutting down openvpn-nl: "
 	for pidf in `/bin/ls $piddir/*.pid 2>/dev/null`; do
 	  if [ -s $pidf ]; then
 	    kill `cat $pidf` >/dev/null 2>&1
@@ -199,7 +199,7 @@ case "$1" in
 		fi
 	    done
 	else
-	    echo "openvpn: service not started"
+	    echo "openvpn-nl: service not started"
 	    exit 1
 	fi
 	;;
@@ -211,7 +211,7 @@ case "$1" in
 		fi
 	    done
 	else
-	    echo "openvpn: service not started"
+	    echo "openvpn-nl: service not started"
 	    exit 1
 	fi
 	;;
@@ -232,12 +232,12 @@ case "$1" in
 	    done
 	    echo "Status written to /var/log/messages"
 	else
-	    echo "openvpn: service not started"
+	    echo "openvpn-nl: service not started"
 	    exit 1
 	fi
         ;;
   *)
-	echo "Usage: openvpn {start|stop|restart|condrestart|reload|reopen|status}"
+	echo "Usage: openvpn-nl {start|stop|restart|condrestart|reload|reopen|status}"
 	exit 1
 	;;
 esac

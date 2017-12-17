@@ -36,6 +36,7 @@
 
 #if defined(ENABLE_CRYPTO) && defined(ENABLE_CRYPTO_MBEDTLS)
 
+#include "allowed_crypto.h"
 #include "errlevel.h"
 #include "basic.h"
 #include "buffer.h"
@@ -51,6 +52,14 @@
 #include <mbedtls/havege.h>
 
 #include <mbedtls/entropy.h>
+
+
+/**
+ * Entropy is gathered every FOX_ENTROPY_GATHER_FREQUENCY calls to the
+ * rand_bytes function.  This is a fail-safe for when mbedtls's internal
+ * entropy gathering somehow fails to periodically gather entropy.
+ */
+#define FOX_ENTROPY_GATHER_FREQUENCY 100
 
 
 /*
@@ -141,7 +150,8 @@ const size_t cipher_name_translation_table_count =
 static void
 print_cipher(const cipher_kt_t *info)
 {
-    if (info && (cipher_kt_mode_cbc(info)
+    if (info && is_allowed_data_channel_cipher(cipher_kt_name(info))
+        && (cipher_kt_mode_cbc(info)
 #ifdef HAVE_AEAD_CIPHER_MODES
                  || cipher_kt_mode_aead(info)
 #endif
@@ -212,7 +222,7 @@ show_available_digests(void)
     {
         const mbedtls_md_info_t *info = mbedtls_md_info_from_type(*digests);
 
-        if (info)
+        if (info && is_allowed_data_channel_digest(md_kt_name(info)))
         {
             printf("%s %d bit default key\n", mbedtls_md_get_name(info),
                    mbedtls_md_get_size(info) * 8);
@@ -259,7 +269,8 @@ rand_ctx_get(void)
          * 800-90 section 8.7.1). We have very little information at this stage.
          * Include Program Name, memory address of the context and PID.
          */
-        buf_printf(&pers_string, "OpenVPN %0u %p %s", platform_getpid(), &cd_ctx, time_string(0, 0, 0, &gc));
+        buf_printf(&pers_string, "OpenVPN %0u %p %s", platform_getpid(),
+                   &cd_ctx, time_string(0, 0, true, &gc));
 
         /* Initialise mbed TLS RNG, and built-in entropy sources */
         mbedtls_entropy_init(&ec);
@@ -291,6 +302,7 @@ rand_ctx_enable_prediction_resistance(void)
 int
 rand_bytes(uint8_t *output, int len)
 {
+    static int gather_delay = 0;
     mbedtls_ctr_drbg_context *rng_ctx = rand_ctx_get();
 
     while (len > 0)
@@ -303,9 +315,37 @@ rand_bytes(uint8_t *output, int len)
 
         output += blen;
         len -= blen;
+
+        /* Hardening: add fail-safe entropy gathering */
+        if (gather_delay++ >= FOX_ENTROPY_GATHER_FREQUENCY)
+        {
+            mbedtls_entropy_context *e_ctx = rng_ctx->p_entropy;
+            ASSERT(e_ctx != NULL);
+            if (0 != mbedtls_entropy_gather(e_ctx))
+                return 0;
+
+            gather_delay = 0;
+        }
     }
 
     return 1;
+}
+
+bool rand_update_manual(const void *data, size_t len)
+{
+    mbedtls_ctr_drbg_context *rng_ctx = rand_ctx_get();
+
+    if (!rng_ctx)
+    {
+        return false;
+    }
+
+    if (!mbed_ok(mbedtls_entropy_update_manual(rng_ctx->p_entropy, data, len)))
+    {
+        return false;
+    }
+
+    return true;
 }
 
 /*
@@ -523,7 +563,7 @@ cipher_ctx_free(mbedtls_cipher_context_t *ctx)
 }
 
 void
-cipher_ctx_init(mbedtls_cipher_context_t *ctx, uint8_t *key, int key_len,
+cipher_ctx_init(mbedtls_cipher_context_t *ctx, const uint8_t *key, int key_len,
                 const mbedtls_cipher_info_t *kt, const mbedtls_operation_t operation)
 {
     ASSERT(NULL != kt && NULL != ctx);

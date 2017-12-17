@@ -132,6 +132,16 @@ result_t backend_x509_get_username(char *common_name, int cn_len,
 bool x509_username_field_ext_supported(const char *extname);
 #endif
 
+/**
+ * Return the certificate's issuer name.
+ *
+ * @param cert          Certificate to retrieve the issuer from.
+ * @param gc            Garbage collection arena to use when allocating string.
+ *
+ * @return              Issuer name, or NULL on error.
+ */
+char *backend_x509_get_issuer(openvpn_x509_cert_t *cert, struct gc_arena *gc);
+
 /*
  * Return the certificate's serial number in decimal string representation.
  *

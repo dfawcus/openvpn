@@ -713,6 +713,9 @@ init_ssl(const struct options *options, struct tls_root_ctx *new_ctx)
         tls_ctx_load_ecdh_params(new_ctx, options->ecdh_curve);
     }
 
+    /* Restrict allowed certificate crypto algorithms */
+    tls_ctx_set_cert_profile(new_ctx, options->tls_cert_profile);
+
 #ifdef ENABLE_CRYPTO_MBEDTLS
     /* Personalise the random by mixing in the certificate */
     tls_ctx_personalise_random(new_ctx);
@@ -1985,7 +1988,7 @@ tls_session_update_crypto_params(struct tls_session *session,
     /* Update frame parameters: undo worst-case overhead, add actual overhead */
     frame_add_to_extra_frame(frame, -(crypto_max_overhead()));
     crypto_adjust_frame_parameters(frame, &session->opt->key_type,
-                                   options->use_iv, options->replay, packet_id_long_form);
+                                   options->replay, packet_id_long_form);
     frame_finalize(frame, options->ce.link_mtu_defined, options->ce.link_mtu,
                    options->ce.tun_mtu_defined, options->ce.tun_mtu);
     frame_init_mssfix(frame, options);
@@ -2538,6 +2541,14 @@ key_method_2_read(struct buffer *buf, struct tls_multi *multi, struct tls_sessio
     if (!key_source2_read(ks->key_src, buf, session->opt->server))
     {
         msg(D_TLS_ERRORS, "TLS Error: Error reading remote data channel key source entropy from plaintext buffer");
+        goto error;
+    }
+
+    const struct key_source *peer_key_source = session->opt->server ?
+            &ks->key_src->client : &ks->key_src->server;
+    if (!rand_update_manual(peer_key_source, sizeof(*peer_key_source)))
+    {
+        msg (D_TLS_ERRORS, "TLS ERROR: unable to update entropy");
         goto error;
     }
 

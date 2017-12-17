@@ -125,6 +125,17 @@ void show_available_engines(void);
  */
 int rand_bytes(uint8_t *output, int len);
 
+/**
+ * Feed bytes into local entropy pool.
+ *
+ * @param data          Pointer to data to feed in.
+ * @param len           Length of data, in bytes.
+ *
+ * @return              true on success, false on failure
+ */
+bool rand_update_manual(const void *data, size_t len);
+
+
 /*
  *
  * Key functions, allow manipulation of keys.
@@ -323,7 +334,7 @@ void cipher_ctx_free(cipher_ctx_t *ctx);
  * @param enc           Whether to encrypt or decrypt (either
  *                      \c MBEDTLS_OP_ENCRYPT or \c MBEDTLS_OP_DECRYPT).
  */
-void cipher_ctx_init(cipher_ctx_t *ctx, uint8_t *key, int key_len,
+void cipher_ctx_init(cipher_ctx_t *ctx, const uint8_t *key, int key_len,
                      const cipher_kt_t *kt, int enc);
 
 /**

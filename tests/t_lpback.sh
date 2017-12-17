@@ -35,8 +35,9 @@ CIPHERS=$(${top_builddir}/src/openvpn/openvpn --show-ciphers | \
 # GD, 2014-07-06 do not test RC5-* either (fails on NetBSD w/o libcrypto_rc5)
 CIPHERS=$(echo "$CIPHERS" | egrep -v '^(DES-EDE3-CFB1|DES-CFB1|RC5-)' )
 
-# Also test cipher 'none'
-CIPHERS=${CIPHERS}$(printf "\nnone")
+# Fox-IT hardening; test for cipher 'none' should fail, do not test here.
+# See below for negative test
+#CIPHERS=${CIPHERS}$(printf "\nnone")
 
 "${top_builddir}/src/openvpn/openvpn" --genkey --secret key.$$
 set +e
@@ -52,6 +53,50 @@ do
         e=1
     else
         echo "OK"
+    fi
+done
+
+# Fox-IT hardening; verify that unsupported ciphers are indeed _not_ accepted,
+# including 'none'.
+CIPHERS='BF-CBC AES-128-CBC none'
+for cipher in ${CIPHERS}
+do
+    echo -n "Testing cipher ${cipher}... "
+    ( "${top_builddir}/src/openvpn/openvpn" --test-crypto --secret key.$$ --cipher ${cipher} ) >log.$$ 2>&1
+    if [ $? = 0 ] ; then
+        echo "FAILED: ${cipher} should not be an accepted cipher"
+        cat log.$$
+        e=1
+    else
+        echo "OK: ${cipher} is not an accepted cipher (failure expected)"
+    fi
+done
+
+# Fox-IT hardening; verify that SHA256 is a supported digest algorithm.
+auth='SHA256'
+echo -n "Testing digest algorithm ${auth}... "
+( "${top_builddir}/src/openvpn/openvpn" --test-crypto --secret key.$$ --cipher AES-256-CBC --auth ${auth} ) >log.$$ 2>&1
+if [ $? != 0 ] ; then
+    echo "FAILED"
+    cat log.$$
+    e=1
+else
+    echo "OK"
+fi
+
+# Fox-IT hardening; verify that unsupported digests are indeed _not_ accepted,
+# including 'none'.
+DIGESTS='MD5 SHA1 none'
+for auth in ${DIGESTS}
+do
+    echo -n "Testing digest algorithm ${auth}... "
+    ( "${top_builddir}/src/openvpn/openvpn" --test-crypto --secret key.$$ --cipher AES-256-CBC --auth ${auth} ) >log.$$ 2>&1
+    if [ $? = 0 ] ; then
+        echo "FAILED: ${auth} should not be an accepted digest algorithm"
+        cat log.$$
+        e=1
+    else
+        echo "OK: ${auth} is not an accepted digest algorithm (failure expected)"
     fi
 done
 

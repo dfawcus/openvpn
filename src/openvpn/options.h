@@ -29,6 +29,11 @@
 #ifndef OPTIONS_H
 #define OPTIONS_H
 
+/* Fox-IT hardening: must compile with crypto and ssl defined. */
+#ifndef ENABLE_CRYPTO
+# error "Compiling without ENABLE_CRYPTO is not supported."
+#endif
+
 #include "basic.h"
 #include "common.h"
 #include "mtu.h"
@@ -486,11 +491,11 @@ struct options
     int replay_window;
     int replay_time;
     const char *packet_id_file;
-    bool use_iv;
     bool test_crypto;
 #ifdef ENABLE_PREDICTION_RESISTANCE
     bool use_prediction_resistance;
 #endif
+    int min_platform_entropy;
 
     /* TLS (control channel) parms */
     bool tls_server;
@@ -503,6 +508,7 @@ struct options
     const char *priv_key_file;
     const char *pkcs12_file;
     const char *cipher_list;
+    const char *tls_cert_profile;
     const char *ecdh_curve;
     const char *tls_verify;
     int verify_x509_type;

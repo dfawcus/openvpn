@@ -382,6 +382,12 @@ New features
   is in use, to make Windows prefer the TAP adapter for DNS queries
   (avoiding large delays)
 
+- The new option ``--tls-cert-profile`` can be used to restrict the set of
+  allowed crypto algorithms in TLS certificates in mbed TLS builds.  The
+  default profile is 'legacy' for now, which allows SHA1+, RSA-1024+ and any
+  elliptic curve certificates.  The default will be changed to the 'preferred'
+  profile in the future, which requires SHA2+, RSA-2048+ and any curve.
+
 
 Security
 --------

@@ -838,8 +838,7 @@ init_static(void)
         struct gc_arena gc = gc_new();
         uint8_t rndbuf[8];
         int i;
-        prng_init("sha1", 16);
-        /*prng_init (NULL, 0);*/
+        prng_init("sha256", 16);
         const int factor = 1;
         for (i = 0; i < factor * 8; ++i)
         {
@@ -1701,7 +1700,7 @@ do_open_tun(struct context *c)
 #ifdef _WIN32
     /* store (hide) interactive service handle in tuntap_options */
     c->c1.tuntap->options.msg_channel = c->options.msg_channel;
-    msg(D_ROUTE, "interactive service msg_channel=%u", (unsigned int) c->options.msg_channel);
+    msg(D_ROUTE, "interactive service msg_channel=%"PRIuPTR, (uintptr_t) c->options.msg_channel);
 #endif
 
     /* allocate route list structure */
@@ -2473,11 +2472,6 @@ do_init_crypto_static(struct context *c, const unsigned int flags)
     init_crypto_pre(c, flags);
 
     /* Initialize flags */
-    if (c->options.use_iv)
-    {
-        c->c2.crypto_options.flags |= CO_USE_IV;
-    }
-
     if (c->options.mute_replay_warnings)
     {
         c->c2.crypto_options.flags |= CO_MUTE_REPLAY_WARNINGS;
@@ -2518,13 +2512,11 @@ do_init_crypto_static(struct context *c, const unsigned int flags)
     c->c2.crypto_options.key_ctx_bi = c->c1.ks.static_key;
 
     /* Compute MTU parameters */
-    crypto_adjust_frame_parameters(&c->c2.frame,
-                                   &c->c1.ks.key_type,
-                                   options->use_iv, options->replay, true);
+    crypto_adjust_frame_parameters(&c->c2.frame, &c->c1.ks.key_type,
+                                   options->replay, true);
 
-    /* Sanity check on IV, sequence number, and cipher mode options */
-    check_replay_iv_consistency(&c->c1.ks.key_type, options->replay,
-                                options->use_iv);
+    /* Sanity check on sequence number, and cipher mode options */
+    check_replay_consistency(&c->c1.ks.key_type, options->replay);
 }
 
 /*
@@ -2651,9 +2643,8 @@ do_init_crypto_tls(struct context *c, const unsigned int flags)
         return;
     }
 
-    /* Sanity check on IV, sequence number, and cipher mode options */
-    check_replay_iv_consistency(&c->c1.ks.key_type, options->replay,
-                                options->use_iv);
+    /* Sanity check on sequence number, and cipher mode options */
+    check_replay_consistency(&c->c1.ks.key_type, options->replay);
 
     /* In short form, unique datagram identifier is 32 bits, in long form 64 bits */
     packet_id_long_form = cipher_kt_mode_ofb_cfb(c->c1.ks.key_type.cipher);
@@ -2667,17 +2658,12 @@ do_init_crypto_tls(struct context *c, const unsigned int flags)
     else
     {
         crypto_adjust_frame_parameters(&c->c2.frame, &c->c1.ks.key_type,
-                                       options->use_iv, options->replay, packet_id_long_form);
+                                       options->replay, packet_id_long_form);
     }
     tls_adjust_frame_parameters(&c->c2.frame);
 
     /* Set all command-line TLS-related options */
     CLEAR(to);
-
-    if (options->use_iv)
-    {
-        to.crypto_flags |= CO_USE_IV;
-    }
 
     if (options->mute_replay_warnings)
     {
@@ -2815,9 +2801,8 @@ do_init_crypto_tls(struct context *c, const unsigned int flags)
         to.tls_wrap.opt.key_ctx_bi = c->c1.ks.tls_wrap_key;
         to.tls_wrap.opt.pid_persist = &c->c1.pid_persist;
         to.tls_wrap.opt.flags |= CO_PACKET_ID_LONG_FORM;
-        crypto_adjust_frame_parameters(&to.frame,
-                                       &c->c1.ks.tls_auth_key_type,
-                                       false, true, true);
+        crypto_adjust_frame_parameters(&to.frame, &c->c1.ks.tls_auth_key_type,
+                                       true, true);
     }
 
     /* TLS handshake encryption (--tls-crypt) */
@@ -2867,41 +2852,53 @@ do_init_finalize_tls_frame(struct context *c)
     }
 }
 
-/*
- * No encryption or authentication.
- */
-static void
-do_init_crypto_none(const struct context *c)
-{
-    ASSERT(!c->options.test_crypto);
-    msg(M_WARN,
-        "******* WARNING *******: All encryption and authentication features "
-        "disabled -- All data will be tunnelled as clear text and will not be "
-        "protected against man-in-the-middle changes. "
-        "PLEASE DO RECONSIDER THIS CONFIGURATION!");
-}
 #endif /* ifdef ENABLE_CRYPTO */
 
 static void
 do_init_crypto(struct context *c, const unsigned int flags)
 {
-#ifdef ENABLE_CRYPTO
-    if (c->options.shared_secret_file)
+#if !defined(_WIN32)
+    if (c->mode == CM_TOP || c->mode == CM_P2P)
     {
-        do_init_crypto_static(c, flags);
+        /*
+         * Fox-IT hardening:
+         * On unix-like platforms, read a few bytes from /dev/random to block
+         * until at least the platform believes to have gathered enough
+         * entropy.
+         */
+        char tmp_buf[FOX_MIN_PLATFORM_ENTROPY_MAX] = { 0 };
+        ASSERT(c->options.min_platform_entropy <= FOX_MIN_PLATFORM_ENTROPY_MAX);
+        msg(M_INFO, "Waiting for platform entropy, this may take a while...");
+        FILE *dev_random = fopen( "/dev/random", "rb" );
+        if (dev_random == NULL)
+        {
+            msg(M_FATAL, "Failed to open /dev/random");
+        }
+
+        int read_len = fread(tmp_buf, 1, c->options.min_platform_entropy,
+                             dev_random);
+        if (read_len != c->options.min_platform_entropy)
+        {
+            fclose(dev_random);
+            msg(M_FATAL, "Failed to read from /dev/random");
+        }
+
+        fclose(dev_random);
     }
-    else if (c->options.tls_server || c->options.tls_client)
+#endif
+
+#ifdef ENABLE_CRYPTO
+    if (c->options.tls_server || c->options.tls_client)
     {
         do_init_crypto_tls(c, flags);
     }
-    else                        /* no encryption or authentication. */
+    else
     {
-        do_init_crypto_none(c);
+        msg(M_FATAL, "OpenVPN-NL requires enabling TLS.  "
+            "Please use --server/--client (or --tls-server/--tls-client)");
     }
 #else /* ENABLE_CRYPTO */
-    msg(M_WARN,
-        "******* WARNING *******: " PACKAGE_NAME
-        " built without crypto library -- encryption and authentication features disabled -- all data will be tunnelled as cleartext");
+#error Fox-IT hardening: crypto MUST be enabled.
 #endif /* ENABLE_CRYPTO */
 }
 
@@ -3104,11 +3101,7 @@ do_option_warnings(struct context *c)
 #ifdef ENABLE_CRYPTO
     if (!o->replay)
     {
-        msg(M_WARN, "WARNING: You have disabled Replay Protection (--no-replay) which may make " PACKAGE_NAME " less secure");
-    }
-    if (!o->use_iv)
-    {
-        msg(M_WARN, "WARNING: You have disabled Crypto IVs (--no-iv) which may make " PACKAGE_NAME " less secure");
+        msg(M_FATAL, "ERROR: You attempted to disable Replay Protection (--no-replay) which may make " PACKAGE_NAME " less secure");
     }
 
     if (o->tls_server)
@@ -3121,7 +3114,7 @@ do_option_warnings(struct context *c)
         && !(o->ns_cert_type & NS_CERT_CHECK_SERVER)
         && !o->remote_cert_eku)
     {
-        msg(M_WARN, "WARNING: No server certificate verification method has been enabled.  See http://openvpn.net/howto.html#mitm for more info.");
+        msg(M_FATAL, "ERROR: No server certificate verification method has been enabled.  See http://openvpn.net/howto.html#mitm for more info.");
     }
     if (o->ns_cert_type)
     {

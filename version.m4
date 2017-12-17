@@ -1,13 +1,14 @@
 dnl define the OpenVPN version
 define([PRODUCT_NAME], [OpenVPN])
-define([PRODUCT_TARNAME], [openvpn])
+define([PRODUCT_TARNAME], [openvpn-nl])
 define([PRODUCT_VERSION_MAJOR], [2])
 define([PRODUCT_VERSION_MINOR], [4])
 define([PRODUCT_VERSION_PATCH], [.4])
 m4_append([PRODUCT_VERSION], [PRODUCT_VERSION_MAJOR])
 m4_append([PRODUCT_VERSION], [PRODUCT_VERSION_MINOR], [[.]])
 m4_append([PRODUCT_VERSION], [PRODUCT_VERSION_PATCH], [[]])
-define([PRODUCT_BUGREPORT], [openvpn-users@lists.sourceforge.net])
+define([PRODUCT_RELEASE], [nl1])
+define([PRODUCT_BUGREPORT], [openvpn@fox-it.com])
 define([PRODUCT_VERSION_RESOURCE], [2,4,4,0])
 dnl define the TAP version
 define([PRODUCT_TAP_WIN_COMPONENT_ID], [tap0901])

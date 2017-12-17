@@ -56,18 +56,40 @@
 /** Legal characters in a common name with --compat-names */
 #define COMMON_NAME_CHAR_CLASS (CC_ALNUM|CC_UNDERBAR|CC_DASH|CC_DOT|CC_AT|CC_SLASH)
 
-static void
+static bool
 string_mod_remap_name(char *str, const unsigned int restrictive_flags)
 {
     if (compat_flag(COMPAT_FLAG_QUERY | COMPAT_NAMES)
         && !compat_flag(COMPAT_FLAG_QUERY | COMPAT_NO_NAME_REMAPPING))
     {
-        string_mod(str, restrictive_flags, 0, '_');
+        return string_mod(str, restrictive_flags, 0, '_');
     }
     else
     {
-        string_mod(str, CC_PRINT, CC_CRLF, '_');
+        return string_mod(str, CC_PRINT, CC_CRLF, '_');
     }
+}
+
+static char *
+x509_get_issuer(openvpn_x509_cert_t *cert, int cert_depth, struct gc_arena *gc)
+{
+    char *issuer = backend_x509_get_issuer(cert, gc);
+    if (!issuer)
+    {
+        msg (D_TLS_ERRORS, "VERIFY ERROR: depth=%d, "
+             "could not extract X509 issuer string from certificate",
+             cert_depth);
+        return NULL;
+    }
+
+    /* enforce character class restrictions in X509 issuer */
+    if (!string_mod_remap_name (issuer, X509_NAME_CHAR_CLASS))
+    {
+        msg (D_TLS_ERRORS, "VERIFY ERROR: depth=%d, illegal characters in "
+             "issuer string from certificate", cert_depth);
+    }
+
+    return issuer;
 }
 
 /*
@@ -495,6 +517,11 @@ verify_cert_set_env(struct env_set *es, openvpn_x509_cert_t *peer_cert, int cert
                    format_hex_ex(BPTR(&sha256), BLEN(&sha256), 0, 1, ":", &gc));
     }
 
+    /* export issuer as environmental variable */
+    const char *issuer = x509_get_issuer(peer_cert, cert_depth, &gc);
+    openvpn_snprintf(envname, sizeof(envname), "tls_issuer_%d", cert_depth);
+    setenv_str(es, envname, issuer);
+
     /* export serial number as environmental variable */
     serial = backend_x509_get_serial(peer_cert, &gc);
     openvpn_snprintf(envname, sizeof(envname), "tls_serial_%d", cert_depth);
@@ -685,8 +712,11 @@ verify_cert(struct tls_session *session, openvpn_x509_cert_t *cert, int cert_dep
     }
 
     /* enforce character class restrictions in X509 name */
-    string_mod_remap_name(subject, X509_NAME_CHAR_CLASS);
-    string_replace_leading(subject, '-', '_');
+    if (!string_mod_remap_name (subject, X509_NAME_CHAR_CLASS))
+    {
+        msg (D_TLS_ERRORS, "VERIFY ERROR: depth=%d, illegal characters in "
+             "subject string from certificate", cert_depth);
+    }
 
     /* extract the username (default is CN) */
     if (SUCCESS != backend_x509_get_username(common_name, sizeof(common_name),
@@ -705,7 +735,11 @@ verify_cert(struct tls_session *session, openvpn_x509_cert_t *cert, int cert_dep
     }
 
     /* enforce character class restrictions in common name */
-    string_mod_remap_name(common_name, COMMON_NAME_CHAR_CLASS);
+    if (!string_mod_remap_name (common_name, COMMON_NAME_CHAR_CLASS))
+    {
+        msg (D_TLS_ERRORS, "VERIFY ERROR: depth=%d, illegal characters in "
+             "common name from certificate", cert_depth);
+    }
 
     /* warn if cert chain is too deep */
     if (cert_depth >= MAX_CERT_DEPTH)
